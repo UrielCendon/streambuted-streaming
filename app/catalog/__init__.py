@@ -1,0 +1,1 @@
+"""Catalog Service integration package."""

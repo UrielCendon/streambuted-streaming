@@ -1,0 +1,1 @@
+"""RabbitMQ event publishing helpers."""
