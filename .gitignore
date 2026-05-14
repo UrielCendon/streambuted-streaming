@@ -1,3 +1,6 @@
 __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
+.coverage
+coverage.xml
+htmlcov/
