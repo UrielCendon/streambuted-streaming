@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import inspect
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -149,13 +150,15 @@ class PlaybackService:
                 track_id,
             )
             if counted_now:
-                self._event_publisher.publish_track_playback_counted(
+                publish_result = self._event_publisher.publish_track_playback_counted(
                     build_track_playback_counted_event(
                         user_id=user_id,
                         track_id=track_id,
                         position_seconds=request.position_seconds,
                     )
                 )
+                if inspect.isawaitable(publish_result):
+                    await publish_result
                 updated_progress = await self._progress_repository.get_progress(
                     user_id,
                     track_id,

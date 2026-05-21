@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Awaitable
 from typing import Any, Protocol
 
 import pika
@@ -16,7 +17,10 @@ TRACK_PLAYBACK_COUNTED_ROUTING_KEY = "track.playback.counted"
 class PlaybackEventPublisher(Protocol):
     """Publishes playback lifecycle events."""
 
-    def publish_track_playback_counted(self, event: dict[str, Any]) -> bool:
+    def publish_track_playback_counted(
+        self,
+        event: dict[str, Any],
+    ) -> bool | Awaitable[bool]:
         """Publish a TrackPlaybackCounted event."""
 
 
@@ -32,8 +36,21 @@ class NoopPlaybackEventPublisher:
         return False
 
 
+class OutboxPlaybackEventPublisher:
+    """Stores playback events locally so RabbitMQ outages do not drop them."""
+
+    def __init__(self, event_outbox: Any) -> None:
+        """Create an outbox-backed playback event publisher."""
+        self._event_outbox = event_outbox
+
+    async def publish_track_playback_counted(self, event: dict[str, Any]) -> bool:
+        """Save a TrackPlaybackCounted event for asynchronous delivery."""
+        await self._event_outbox.enqueue_track_playback_counted(event)
+        return True
+
+
 class RabbitMqPlaybackEventPublisher:
-    """Best-effort RabbitMQ publisher for playback events."""
+    """RabbitMQ publisher used by the playback outbox relay."""
 
     def __init__(
         self,
@@ -73,6 +90,7 @@ class RabbitMqPlaybackEventPublisher:
                 exchange_type="topic",
                 durable=True,
             )
+            channel.confirm_delivery()
             channel.basic_publish(
                 exchange=STREAMING_EXCHANGE,
                 routing_key=TRACK_PLAYBACK_COUNTED_ROUTING_KEY,
@@ -103,12 +121,17 @@ class RabbitMqPlaybackEventPublisher:
                 connection.close()
 
 
-def build_event_publisher(settings: Settings) -> PlaybackEventPublisher:
+def build_event_publisher(
+    settings: Settings,
+    event_outbox: Any | None = None,
+) -> PlaybackEventPublisher:
     """Build the configured playback event publisher."""
     if not settings.event_signing_secret.strip():
         return NoopPlaybackEventPublisher()
     if not settings.rabbitmq_default_pass.strip():
         return NoopPlaybackEventPublisher()
+    if event_outbox is not None:
+        return OutboxPlaybackEventPublisher(event_outbox)
 
     return RabbitMqPlaybackEventPublisher(
         host=settings.rabbitmq_host,
