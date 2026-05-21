@@ -19,6 +19,7 @@ from app.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
+from app.events.outbox import MongoPlaybackEventOutbox, PlaybackEventOutboxProcessor
 from app.events.publisher import PlaybackEventPublisher, build_event_publisher
 from app.playback.routes import router as playback_router
 from app.playback.service import PlaybackService
@@ -38,6 +39,8 @@ def create_app(
     progress_repository: MongoPlaybackProgressRepository | None = None,
     catalog_client: CatalogClient | None = None,
     event_publisher: PlaybackEventPublisher | None = None,
+    event_outbox: MongoPlaybackEventOutbox | None = None,
+    event_outbox_processor: PlaybackEventOutboxProcessor | None = None,
     jwt_validator: JwtValidator | None = None,
     playback_token_service: PlaybackTokenService | None = None,
 ) -> FastAPI:
@@ -51,7 +54,30 @@ def create_app(
         app_settings.catalog_grpc_target,
         timeout_seconds=app_settings.catalog_grpc_timeout_seconds,
     )
-    app_event_publisher = event_publisher or build_event_publisher(app_settings)
+    should_use_outbox = (
+        event_publisher is None
+        and bool(app_settings.event_signing_secret.strip())
+        and bool(app_settings.rabbitmq_default_pass.strip())
+    )
+    app_event_outbox = (
+        event_outbox
+        if should_use_outbox
+        else None
+    ) or (
+        MongoPlaybackEventOutbox.from_settings(app_settings)
+        if should_use_outbox
+        else None
+    )
+    app_event_publisher = event_publisher or build_event_publisher(
+        app_settings,
+        app_event_outbox,
+    )
+    app_event_outbox_processor = event_outbox_processor
+    if app_event_outbox_processor is None and app_event_outbox is not None:
+        app_event_outbox_processor = PlaybackEventOutboxProcessor(
+            app_event_outbox,
+            build_event_publisher(app_settings),
+        )
     app_jwt_validator = jwt_validator or JwtValidator(
         jwks_url=app_settings.jwt_jwks_url,
         issuer=app_settings.jwt_issuer,
@@ -65,12 +91,20 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await maybe_await(app_repository.ensure_indexes())
+        if app_event_outbox is not None:
+            await app_event_outbox.ensure_indexes()
+        if app_event_outbox_processor is not None:
+            app_event_outbox_processor.start()
         try:
             yield
         finally:
+            if app_event_outbox_processor is not None:
+                await app_event_outbox_processor.stop()
             close = getattr(app_repository, "close", None)
             if close:
                 close()
+            if app_event_outbox is not None:
+                app_event_outbox.close()
 
     app = FastAPI(
         title="StreamButed Streaming Service",
