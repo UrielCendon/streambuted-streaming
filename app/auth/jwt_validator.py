@@ -10,6 +10,7 @@ from app.auth.models import AuthenticatedUser, normalize_role
 from app.errors import AppError
 
 logger = logging.getLogger(__name__)
+ACCOUNT_BANNED_MESSAGE = "La cuenta se encuentra suspendida."
 
 
 class JwtValidator:
@@ -37,6 +38,7 @@ class JwtValidator:
 
         self._jwks_url = jwks_url.strip()
         self._issuer = issuer.strip()
+        self._identity_base_url = self._issuer.rstrip("/")
         self._audience = audience.strip() if audience and audience.strip() else None
         self._cache_ttl_seconds = cache_ttl_seconds
         self._jwks: dict[str, Any] | None = None
@@ -80,6 +82,8 @@ class JwtValidator:
             normalized_role = normalize_role(role)
         except ValueError as exc:
             raise AppError(401, "Unauthorized", "JWT role claim is invalid.") from exc
+
+        self._validate_account_state(token)
 
         return AuthenticatedUser(subject=subject.strip(), role=normalized_role)
 
@@ -152,6 +156,54 @@ class JwtValidator:
         self._jwks = jwks
         self._jwks_loaded_at = time.monotonic()
         return jwks
+
+    def _validate_account_state(self, token: str) -> None:
+        try:
+            response = httpx.get(
+                f"{self._identity_base_url}/api/v1/auth/validate",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5.0,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("Failed to validate account state with Identity Service: %s", exc)
+            raise AppError(
+                503,
+                "ServiceUnavailable",
+                "JWT validation is temporarily unavailable.",
+            ) from exc
+
+        payload = self._parse_identity_payload(response)
+        if response.status_code == 200:
+            return
+
+        if response.status_code == 403 and self._is_account_banned_payload(payload):
+            raise AppError(
+                403,
+                "AccountBannedException",
+                payload.get("message", ACCOUNT_BANNED_MESSAGE),
+                payload,
+            )
+
+        if response.status_code == 401:
+            raise AppError(401, "Unauthorized", "Invalid or expired JWT token.")
+
+        raise AppError(
+            503,
+            "ServiceUnavailable",
+            "JWT validation is temporarily unavailable.",
+        )
+
+    @staticmethod
+    def _parse_identity_payload(response: httpx.Response) -> dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _is_account_banned_payload(payload: dict[str, Any]) -> bool:
+        return payload.get("code") == "ACCOUNT_BANNED" or payload.get("error") == "AccountBannedException"
 
     @staticmethod
     def _find_key(jwks: dict[str, Any], kid: str) -> dict[str, Any] | None:

@@ -36,6 +36,23 @@ class FakeJwtValidator:
         return AuthenticatedUser(subject=USER_ID, role=UserRole.LISTENER)
 
 
+class SuspendedJwtValidator:
+    def validate_authorization_header(
+        self,
+        authorization_header: str | None,
+    ) -> AuthenticatedUser:
+        raise AppError(
+            403,
+            "AccountBannedException",
+            "La cuenta se encuentra suspendida.",
+            {
+                "code": "ACCOUNT_BANNED",
+                "banType": "TEMPORARY",
+                "remainingSeconds": 600,
+            },
+        )
+
+
 class FakeCatalogClient:
     def __init__(self) -> None:
         self.tracks: dict[str, CatalogTrack] = {
@@ -184,6 +201,21 @@ def build_client() -> tuple[TestClient, FakeCatalogClient, FakeStorage, FakeProg
     return TestClient(app), catalog, storage, repository, publisher
 
 
+def build_client_with_validator(
+    jwt_validator: FakeJwtValidator | SuspendedJwtValidator,
+) -> TestClient:
+    app = create_app(
+        settings=build_settings(),
+        storage=FakeStorage(),
+        progress_repository=FakeProgressRepository(),
+        catalog_client=FakeCatalogClient(),
+        event_publisher=FakePublisher(),
+        jwt_validator=jwt_validator,
+        playback_token_service=PlaybackTokenService(PLAYBACK_SECRET, 300),
+    )
+    return TestClient(app)
+
+
 def create_playback_token(track_id: str = TRACK_ID, expires_delta: timedelta | None = None) -> str:
     now = datetime.now(UTC)
     expires_at = now + (expires_delta if expires_delta is not None else timedelta(minutes=5))
@@ -286,6 +318,19 @@ def test_stream_session_returns_scoped_playback_token() -> None:
     assert payload["sub"] == USER_ID
     assert payload["trackId"] == TRACK_ID
     assert payload["purpose"] == PLAYBACK_TOKEN_PURPOSE
+
+
+def test_stream_session_rejects_suspended_account() -> None:
+    client = build_client_with_validator(SuspendedJwtValidator())
+
+    with client:
+        response = client.post(
+            f"/api/v1/playback/tracks/{TRACK_ID}/stream-session",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "ACCOUNT_BANNED"
 
 
 def test_stream_rejects_expired_playback_token() -> None:
