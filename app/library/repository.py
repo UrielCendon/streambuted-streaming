@@ -157,6 +157,24 @@ class MongoLibraryRepository:
         await self._playlists.insert_one(document)
         return map_playlist(document)
 
+    async def find_playlist_by_name(
+        self,
+        user_id: str,
+        name: str,
+        exclude_playlist_id: str | None = None,
+    ) -> LibraryPlaylist | None:
+        """Find a private playlist by exact name for a user."""
+        filter_document: dict[str, object] = {
+            "user_id": user_id,
+            "name": name,
+            "is_system": False,
+        }
+        if exclude_playlist_id is not None:
+            filter_document["playlist_id"] = {"$ne": exclude_playlist_id}
+
+        document = await self._playlists.find_one(filter_document)
+        return map_playlist(document) if document else None
+
     async def find_playlist(
         self,
         user_id: str,

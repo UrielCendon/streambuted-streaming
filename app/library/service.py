@@ -79,6 +79,7 @@ class LibraryService:
         authorization_header: str | None,
     ) -> LibraryPlaylistResponse:
         """Create a private playlist."""
+        await self._validate_playlist_name_uniqueness(user_id, name)
         await self._validate_playlist_cover(user_id, cover_asset_id, authorization_header)
         playlist = await self._repository.create_playlist(
             user_id=user_id,
@@ -120,6 +121,12 @@ class LibraryService:
                 "SystemPlaylistImmutable",
                 "System playlists cannot be renamed.",
             )
+        if name is not None:
+            await self._validate_playlist_name_uniqueness(
+                user_id,
+                name,
+                exclude_playlist_id=playlist_id,
+            )
         if cover_asset_id_set:
             await self._validate_playlist_cover(user_id, cover_asset_id, authorization_header)
 
@@ -150,6 +157,12 @@ class LibraryService:
         """Add a published track to a private playlist."""
         playlist = await self._require_playlist(user_id, playlist_id, allow_system=False)
         await self._catalog_client.get_playable_track(track_id)
+        if await self._repository.has_track(playlist.playlist_id, track_id):
+            raise AppError(
+                409,
+                "TrackAlreadyInPlaylist",
+                "This song is already in that playlist.",
+            )
         await self._repository.add_track(playlist.playlist_id, track_id)
         return await self._playlist_detail(playlist)
 
@@ -232,6 +245,24 @@ class LibraryService:
                 422,
                 "InvalidPlaylistCoverType",
                 "Playlist cover must be a PLAYLIST_COVER asset.",
+            )
+
+    async def _validate_playlist_name_uniqueness(
+        self,
+        user_id: str,
+        name: str,
+        exclude_playlist_id: str | None = None,
+    ) -> None:
+        existing = await self._repository.find_playlist_by_name(
+            user_id,
+            name,
+            exclude_playlist_id=exclude_playlist_id,
+        )
+        if existing is not None:
+            raise AppError(
+                409,
+                "PlaylistNameAlreadyExists",
+                "You already have a playlist with that name.",
             )
 
 

@@ -277,6 +277,20 @@ class FakeLibraryRepository:
         self.playlists[playlist.playlist_id] = playlist
         return playlist
 
+    async def find_playlist_by_name(
+        self,
+        user_id: str,
+        name: str,
+        exclude_playlist_id: str | None = None,
+    ) -> LibraryPlaylist | None:
+        for playlist in self.playlists.values():
+            if playlist.user_id != user_id or playlist.is_system or playlist.name != name:
+                continue
+            if exclude_playlist_id is not None and playlist.playlist_id == exclude_playlist_id:
+                continue
+            return playlist
+        return None
+
     async def find_playlist(
         self,
         user_id: str,
@@ -786,6 +800,32 @@ def test_create_playlist_rejects_name_longer_than_twenty_characters() -> None:
     assert response.status_code == 422
 
 
+def test_create_playlist_rejects_duplicate_name_with_exact_case() -> None:
+    client, *_ = build_client()
+
+    with client:
+        first = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "uriel"},
+        )
+        duplicate = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "uriel"},
+        )
+        distinct_case = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "Uriel"},
+        )
+
+    assert first.status_code == 201
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"] == "PlaylistNameAlreadyExists"
+    assert distinct_case.status_code == 201
+
+
 def test_create_playlist_rejects_invalid_cover_type() -> None:
     client, _catalog, _storage, _repository, _publisher, _library_repository = build_client()
     media_asset_client = client.app.state.library_service._media_asset_client
@@ -804,6 +844,32 @@ def test_create_playlist_rejects_invalid_cover_type() -> None:
 
     assert response.status_code == 422
     assert response.json()["error"] == "InvalidPlaylistCoverType"
+
+
+def test_add_track_to_playlist_rejects_duplicate_track() -> None:
+    client, *_ = build_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "Gym"},
+        )
+        playlist_id = created.json()["playlistId"]
+        first_add = client.post(
+            f"/api/v1/library/playlists/{playlist_id}/tracks",
+            headers={"Authorization": "Bearer token"},
+            json={"trackId": TRACK_ID},
+        )
+        duplicate_add = client.post(
+            f"/api/v1/library/playlists/{playlist_id}/tracks",
+            headers={"Authorization": "Bearer token"},
+            json={"trackId": TRACK_ID},
+        )
+
+    assert first_add.status_code == 200
+    assert duplicate_add.status_code == 409
+    assert duplicate_add.json()["error"] == "TrackAlreadyInPlaylist"
 
 
 def test_liked_songs_cover_can_be_updated_without_renaming() -> None:
