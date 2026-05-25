@@ -61,12 +61,8 @@ class MongoLibraryRepository:
 
     async def ensure_indexes(self) -> None:
         """Create required MongoDB indexes."""
-        await self._playlists.create_index(
-            [("user_id", 1), ("system_key", 1)],
-            unique=True,
-            sparse=True,
-            name=USER_SYSTEM_PLAYLIST_INDEX,
-        )
+        await self._unset_legacy_private_system_keys()
+        await self._ensure_system_playlist_index()
         await self._playlists.create_index(
             [("user_id", 1), ("updated_at", -1)],
             name=USER_PLAYLIST_INDEX,
@@ -79,6 +75,38 @@ class MongoLibraryRepository:
         await self._items.create_index(
             [("playlist_id", 1), ("position", 1)],
             name=PLAYLIST_POSITION_INDEX,
+        )
+
+    async def _unset_legacy_private_system_keys(self) -> None:
+        """Remove legacy null system keys from private playlists."""
+        await self._playlists.update_many(
+            {
+                "is_system": False,
+                "system_key": {"$exists": True},
+            },
+            {"$unset": {"system_key": ""}},
+        )
+
+    async def _ensure_system_playlist_index(self) -> None:
+        """Keep the system-playlist uniqueness index scoped to system rows only."""
+        expected_partial_filter = {
+            "is_system": True,
+            "system_key": {"$exists": True},
+        }
+        index_information = await self._playlists.index_information()
+        existing_index = index_information.get(USER_SYSTEM_PLAYLIST_INDEX)
+
+        if existing_index and (
+            not existing_index.get("unique")
+            or existing_index.get("partialFilterExpression") != expected_partial_filter
+        ):
+            await self._playlists.drop_index(USER_SYSTEM_PLAYLIST_INDEX)
+
+        await self._playlists.create_index(
+            [("user_id", 1), ("system_key", 1)],
+            unique=True,
+            partialFilterExpression=expected_partial_filter,
+            name=USER_SYSTEM_PLAYLIST_INDEX,
         )
 
     async def get_or_create_liked_playlist(self, user_id: str) -> LibraryPlaylist:
