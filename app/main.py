@@ -21,6 +21,10 @@ from app.errors import (
 )
 from app.events.outbox import MongoPlaybackEventOutbox, PlaybackEventOutboxProcessor
 from app.events.publisher import PlaybackEventPublisher, build_event_publisher
+from app.library.repository import MongoLibraryRepository
+from app.library.routes import router as library_router
+from app.library.service import LibraryService
+from app.media.client import MediaAssetClient
 from app.playback.routes import router as playback_router
 from app.playback.service import PlaybackService
 from app.playback.token_service import PlaybackTokenService
@@ -37,7 +41,9 @@ def create_app(
     settings: Settings | None = None,
     storage: MinioAudioStorage | None = None,
     progress_repository: MongoPlaybackProgressRepository | None = None,
+    library_repository: MongoLibraryRepository | None = None,
     catalog_client: CatalogClient | None = None,
+    media_asset_client: MediaAssetClient | None = None,
     event_publisher: PlaybackEventPublisher | None = None,
     event_outbox: MongoPlaybackEventOutbox | None = None,
     event_outbox_processor: PlaybackEventOutboxProcessor | None = None,
@@ -50,9 +56,17 @@ def create_app(
     app_repository = progress_repository or MongoPlaybackProgressRepository.from_settings(
         app_settings
     )
+    app_library_repository = library_repository or MongoLibraryRepository.from_settings(
+        app_settings
+    )
     app_catalog_client = catalog_client or CatalogClient(
         app_settings.catalog_grpc_target,
         timeout_seconds=app_settings.catalog_grpc_timeout_seconds,
+        http_base_url=app_settings.catalog_http_base_url,
+    )
+    app_media_asset_client = media_asset_client or MediaAssetClient(
+        app_settings.media_grpc_target,
+        timeout_seconds=app_settings.media_grpc_timeout_seconds,
     )
     should_use_outbox = (
         event_publisher is None
@@ -91,6 +105,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await maybe_await(app_repository.ensure_indexes())
+        await maybe_await(app_library_repository.ensure_indexes())
         if app_event_outbox is not None:
             await app_event_outbox.ensure_indexes()
         if app_event_outbox_processor is not None:
@@ -103,6 +118,9 @@ def create_app(
             close = getattr(app_repository, "close", None)
             if close:
                 close()
+            library_close = getattr(app_library_repository, "close", None)
+            if library_close:
+                library_close()
             if app_event_outbox is not None:
                 app_event_outbox.close()
 
@@ -115,7 +133,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=app_settings.allowed_cors_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Authorization",
             "Content-Type",
@@ -136,6 +154,11 @@ def create_app(
         event_publisher=app_event_publisher,
         valid_playback_seconds=app_settings.streaming_valid_playback_seconds,
     )
+    app.state.library_service = LibraryService(
+        repository=app_library_repository,
+        catalog_client=app_catalog_client,
+        media_asset_client=app_media_asset_client,
+    )
 
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(RangeNotSatisfiableError, range_error_handler)
@@ -148,6 +171,7 @@ def create_app(
         return {"status": "UP", "service": "streaming-service"}
 
     app.include_router(playback_router)
+    app.include_router(library_router)
     return app
 
 

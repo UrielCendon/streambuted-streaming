@@ -2,16 +2,23 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 import grpc
 import jwt
 from fastapi.testclient import TestClient
 
 from app.auth.models import AuthenticatedUser, UserRole
-from app.catalog.client import CatalogClient, CatalogTrack
+from app.catalog.client import CatalogClient, CatalogTrack, PublicCatalogTrack
 from app.config import Settings
 from app.errors import AppError
 from app.grpc.generated import catalog_playback_pb2, catalog_playback_pb2_grpc
+from app.library.repository import (
+    LIKED_SONGS_KEY,
+    LibraryPlaylist,
+    LibraryPlaylistItem,
+    USER_SYSTEM_PLAYLIST_INDEX,
+)
 from app.main import create_app
 from app.playback.ranges import parse_range_header
 from app.playback.token_service import PLAYBACK_TOKEN_PURPOSE, PlaybackTokenService
@@ -22,6 +29,7 @@ TRACK_ID = "8ec8d920-a0f4-467d-ad47-53ecf694cbf4"
 OTHER_TRACK_ID = "d3d87e12-3fd0-4d3f-af1e-77330831257b"
 USER_ID = "37f6c3cb-d848-4678-b545-cd81f5d0f4ea"
 ASSET_ID = "d63f4e03-8f01-4f79-8da4-2faf3a9eb20f"
+PLAYLIST_COVER_ID = "7ab5ee01-64ac-4ed5-95d8-57f6a329b3b5"
 PLAYBACK_SECRET = "test-playback-secret"
 AUDIO_BYTES = bytes(range(256))
 
@@ -76,6 +84,56 @@ class FakeCatalogClient:
         if not track.audio_asset_id:
             raise AppError(409, "TrackNotPlayable", "Track does not have an audio asset.")
         return track
+
+    async def get_public_tracks_by_ids(self, track_ids: list[str]) -> list[PublicCatalogTrack]:
+        result = []
+        for track_id in track_ids:
+            track = self.tracks.get(track_id)
+            if track and track.status == "PUBLICADO":
+                result.append(
+                    PublicCatalogTrack(
+                        track_id=track_id,
+                        artist_id="artist-1",
+                        album_id=None,
+                        title="Midnight Signals",
+                        genre="Electronica",
+                        cover_asset_id="2bb0fdd3-1c8f-44f2-9cc5-17fda43a8ddc",
+                        duration_seconds=138,
+                        status=track.status,
+                        artist_name="Signal Artist",
+                        album_title=None,
+                        raw={},
+                    )
+                )
+        return result
+
+
+class FakeMediaAssetClient:
+    def __init__(self) -> None:
+        self.assets: dict[str, dict[str, str | bool]] = {
+            PLAYLIST_COVER_ID: {
+                "asset_type": "PLAYLIST_COVER",
+                "owner_user_id": USER_ID,
+                "exists": True,
+            }
+        }
+
+    async def get_asset_metadata(
+        self,
+        asset_id: str,
+        authorization_header: str | None,
+    ):
+        if authorization_header != "Bearer token":
+            raise AppError(401, "Unauthorized", "Missing or invalid Authorization header.")
+        asset = self.assets.get(asset_id)
+        if asset is None:
+            raise AppError(404, "PlaylistCoverNotFound", "Playlist cover not found.")
+
+        class Metadata:
+            asset_type = str(asset["asset_type"])
+            owner_user_id = str(asset["owner_user_id"])
+
+        return Metadata()
 
 
 class FakeStorage:
@@ -164,6 +222,151 @@ class FakeProgressRepository:
         return None
 
 
+class FakeLibraryRepository:
+    def __init__(self) -> None:
+        self.playlists: dict[str, LibraryPlaylist] = {}
+        self.items: dict[tuple[str, str], LibraryPlaylistItem] = {}
+        self.index_name: str | None = None
+
+    async def ensure_indexes(self) -> None:
+        self.index_name = USER_SYSTEM_PLAYLIST_INDEX
+
+    async def get_or_create_liked_playlist(self, user_id: str) -> LibraryPlaylist:
+        existing = next(
+            (
+                playlist
+                for playlist in self.playlists.values()
+                if playlist.user_id == user_id and playlist.system_key == LIKED_SONGS_KEY
+            ),
+            None,
+        )
+        if existing:
+            return existing
+
+        now = datetime.now(UTC)
+        playlist = LibraryPlaylist(
+            playlist_id=str(uuid4()),
+            user_id=user_id,
+            name="Canciones que te gustan",
+            cover_asset_id=None,
+            is_system=True,
+            system_key=LIKED_SONGS_KEY,
+            created_at=now,
+            updated_at=now,
+        )
+        self.playlists[playlist.playlist_id] = playlist
+        return playlist
+
+    async def create_playlist(
+        self,
+        user_id: str,
+        name: str,
+        cover_asset_id: str | None,
+    ) -> LibraryPlaylist:
+        now = datetime.now(UTC)
+        playlist = LibraryPlaylist(
+            playlist_id=str(uuid4()),
+            user_id=user_id,
+            name=name,
+            cover_asset_id=cover_asset_id,
+            is_system=False,
+            system_key=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.playlists[playlist.playlist_id] = playlist
+        return playlist
+
+    async def find_playlist(
+        self,
+        user_id: str,
+        playlist_id: str,
+    ) -> LibraryPlaylist | None:
+        playlist = self.playlists.get(playlist_id)
+        if playlist and playlist.user_id == user_id:
+            return playlist
+        return None
+
+    async def list_playlists(self, user_id: str) -> list[LibraryPlaylist]:
+        return [
+            playlist
+            for playlist in self.playlists.values()
+            if playlist.user_id == user_id and not playlist.is_system
+        ]
+
+    async def update_playlist(
+        self,
+        user_id: str,
+        playlist_id: str,
+        name: str | None,
+        cover_asset_id: str | None,
+        cover_asset_id_set: bool = False,
+        allow_system: bool = False,
+    ) -> LibraryPlaylist | None:
+        playlist = await self.find_playlist(user_id, playlist_id)
+        if not playlist or (playlist.is_system and not allow_system):
+            return None
+        updated = LibraryPlaylist(
+            playlist_id=playlist.playlist_id,
+            user_id=playlist.user_id,
+            name=name if name is not None else playlist.name,
+            cover_asset_id=cover_asset_id if cover_asset_id_set else playlist.cover_asset_id,
+            is_system=playlist.is_system,
+            system_key=playlist.system_key,
+            created_at=playlist.created_at,
+            updated_at=datetime.now(UTC),
+        )
+        self.playlists[playlist_id] = updated
+        return updated
+
+    async def delete_playlist(self, user_id: str, playlist_id: str) -> bool:
+        playlist = await self.find_playlist(user_id, playlist_id)
+        if not playlist or playlist.is_system:
+            return False
+        del self.playlists[playlist_id]
+        self.items = {
+            key: item
+            for key, item in self.items.items()
+            if item.playlist_id != playlist_id
+        }
+        return True
+
+    async def add_track(
+        self,
+        playlist_id: str,
+        track_id: str,
+    ) -> LibraryPlaylistItem:
+        existing = self.items.get((playlist_id, track_id))
+        if existing:
+            return existing
+        item = LibraryPlaylistItem(
+            playlist_id=playlist_id,
+            track_id=track_id,
+            position=len([entry for entry in self.items.values() if entry.playlist_id == playlist_id]),
+            added_at=datetime.now(UTC),
+        )
+        self.items[(playlist_id, track_id)] = item
+        return item
+
+    async def remove_track(self, playlist_id: str, track_id: str) -> bool:
+        return self.items.pop((playlist_id, track_id), None) is not None
+
+    async def has_track(self, playlist_id: str, track_id: str) -> bool:
+        return (playlist_id, track_id) in self.items
+
+    async def list_items(self, playlist_id: str) -> list[LibraryPlaylistItem]:
+        return sorted(
+            [item for item in self.items.values() if item.playlist_id == playlist_id],
+            key=lambda item: item.position,
+        )
+
+    async def count_items(self, playlist_id: str) -> int:
+        return len([item for item in self.items.values() if item.playlist_id == playlist_id])
+
+    def close(self) -> None:
+        return None
+
+
 class FakePublisher:
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
@@ -184,21 +387,25 @@ def build_settings() -> Settings:
     )
 
 
-def build_client() -> tuple[TestClient, FakeCatalogClient, FakeStorage, FakeProgressRepository, FakePublisher]:
+def build_client() -> tuple[TestClient, FakeCatalogClient, FakeStorage, FakeProgressRepository, FakePublisher, FakeLibraryRepository]:
     catalog = FakeCatalogClient()
     storage = FakeStorage()
     repository = FakeProgressRepository()
+    library_repository = FakeLibraryRepository()
+    media_asset_client = FakeMediaAssetClient()
     publisher = FakePublisher()
     app = create_app(
         settings=build_settings(),
         storage=storage,
         progress_repository=repository,
+        library_repository=library_repository,
         catalog_client=catalog,
+        media_asset_client=media_asset_client,
         event_publisher=publisher,
         jwt_validator=FakeJwtValidator(),
         playback_token_service=PlaybackTokenService(PLAYBACK_SECRET, 300),
     )
-    return TestClient(app), catalog, storage, repository, publisher
+    return TestClient(app), catalog, storage, repository, publisher, library_repository
 
 
 def build_client_with_validator(
@@ -208,7 +415,9 @@ def build_client_with_validator(
         settings=build_settings(),
         storage=FakeStorage(),
         progress_repository=FakeProgressRepository(),
+        library_repository=FakeLibraryRepository(),
         catalog_client=FakeCatalogClient(),
+        media_asset_client=FakeMediaAssetClient(),
         event_publisher=FakePublisher(),
         jwt_validator=jwt_validator,
         playback_token_service=PlaybackTokenService(PLAYBACK_SECRET, 300),
@@ -430,7 +639,7 @@ def test_put_progress_validates_duration_not_less_than_position() -> None:
 
 
 def test_progress_crossing_threshold_publishes_event_once() -> None:
-    client, *_unused, publisher = build_client()
+    client, _catalog, _storage, _repository, publisher, _library_repository = build_client()
 
     with client:
         first = client.put(
@@ -469,6 +678,172 @@ def test_missing_track_returns_404() -> None:
     with client:
         response = client.post(
             f"/api/v1/playback/tracks/{OTHER_TRACK_ID}/stream-session",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert response.status_code == 404
+
+
+def test_like_track_creates_liked_playlist_idempotently() -> None:
+    client, *_ = build_client()
+
+    with client:
+        first = client.put(
+            f"/api/v1/library/tracks/{TRACK_ID}/like",
+            headers={"Authorization": "Bearer token"},
+        )
+        second = client.put(
+            f"/api/v1/library/tracks/{TRACK_ID}/like",
+            headers={"Authorization": "Bearer token"},
+        )
+        liked_songs = client.get(
+            "/api/v1/library/liked-songs",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert first.status_code == 200
+    assert first.json()["isLiked"] is True
+    assert second.status_code == 200
+    assert liked_songs.status_code == 200
+    body = liked_songs.json()
+    assert body["trackCount"] == 1
+    assert len(body["tracks"]) == 1
+    assert body["tracks"][0]["trackId"] == TRACK_ID
+    assert body["tracks"][0]["artistName"] == "Signal Artist"
+
+
+def test_unlike_track_is_idempotent() -> None:
+    client, *_ = build_client()
+
+    with client:
+        first = client.delete(
+            f"/api/v1/library/tracks/{TRACK_ID}/like",
+            headers={"Authorization": "Bearer token"},
+        )
+        status_response = client.get(
+            f"/api/v1/library/tracks/{TRACK_ID}/like-status",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert first.status_code == 200
+    assert first.json()["isLiked"] is False
+    assert status_response.status_code == 200
+    assert status_response.json()["isLiked"] is False
+
+
+def test_like_rejects_unpublished_track() -> None:
+    client, catalog, *_ = build_client()
+    catalog.tracks[TRACK_ID] = CatalogTrack(
+        track_id=TRACK_ID,
+        status="RETIRADO",
+        audio_asset_id=ASSET_ID,
+        raw={},
+    )
+
+    with client:
+        response = client.put(
+            f"/api/v1/library/tracks/{TRACK_ID}/like",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert response.status_code == 409
+
+
+def test_create_playlist_and_add_track() -> None:
+    client, *_ = build_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "Para manejar", "coverAssetId": PLAYLIST_COVER_ID},
+        )
+        playlist_id = created.json()["playlistId"]
+        updated = client.post(
+            f"/api/v1/library/playlists/{playlist_id}/tracks",
+            headers={"Authorization": "Bearer token"},
+            json={"trackId": TRACK_ID},
+        )
+
+    assert created.status_code == 201
+    assert created.json()["coverAssetId"] == PLAYLIST_COVER_ID
+    assert created.json()["trackCount"] == 0
+    assert updated.status_code == 200
+    assert updated.json()["trackCount"] == 1
+    assert updated.json()["tracks"][0]["title"] == "Midnight Signals"
+
+
+def test_create_playlist_rejects_name_longer_than_twenty_characters() -> None:
+    client, *_ = build_client()
+
+    with client:
+        response = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "Playlist con nombre demasiado largo"},
+        )
+
+    assert response.status_code == 422
+
+
+def test_create_playlist_rejects_invalid_cover_type() -> None:
+    client, _catalog, _storage, _repository, _publisher, _library_repository = build_client()
+    media_asset_client = client.app.state.library_service._media_asset_client
+    media_asset_client.assets[PLAYLIST_COVER_ID] = {
+        "asset_type": "TRACK_COVER",
+        "owner_user_id": USER_ID,
+        "exists": True,
+    }
+
+    with client:
+        response = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "Viaje", "coverAssetId": PLAYLIST_COVER_ID},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "InvalidPlaylistCoverType"
+
+
+def test_liked_songs_cover_can_be_updated_without_renaming() -> None:
+    client, *_ = build_client()
+
+    with client:
+        liked_songs = client.get(
+            "/api/v1/library/liked-songs",
+            headers={"Authorization": "Bearer token"},
+        )
+        playlist_id = liked_songs.json()["playlistId"]
+        updated = client.patch(
+            f"/api/v1/library/playlists/{playlist_id}",
+            headers={"Authorization": "Bearer token"},
+            json={"coverAssetId": PLAYLIST_COVER_ID},
+        )
+        renamed = client.patch(
+            f"/api/v1/library/playlists/{playlist_id}",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "Otro nombre"},
+        )
+
+    assert updated.status_code == 200
+    assert updated.json()["coverAssetId"] == PLAYLIST_COVER_ID
+    assert renamed.status_code == 403
+
+
+def test_playlist_lookup_does_not_leak_other_users_playlists() -> None:
+    client, _catalog, _storage, _repository, _publisher, library_repository = build_client()
+    other_playlist = asyncio.run(
+        library_repository.create_playlist(
+            user_id=OTHER_TRACK_ID,
+            name="Privada",
+            cover_asset_id=None,
+        )
+    )
+
+    with client:
+        response = client.get(
+            f"/api/v1/library/playlists/{other_playlist.playlist_id}",
             headers={"Authorization": "Bearer token"},
         )
 
@@ -579,7 +954,7 @@ class MissingCatalogPlaybackGrpcServicer(
 
 
 def test_progress_repository_creates_unique_user_track_index() -> None:
-    client, _catalog, _storage, repository, _publisher = build_client()
+    client, _catalog, _storage, repository, _publisher, _library_repository = build_client()
 
     with client:
         response = client.get("/api/v1/playback/health")

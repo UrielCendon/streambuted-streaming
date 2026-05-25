@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import grpc
+import httpx
 
 from app.errors import AppError
 from app.grpc.generated import catalog_playback_pb2, catalog_playback_pb2_grpc
@@ -10,6 +11,7 @@ from app.grpc.generated import catalog_playback_pb2, catalog_playback_pb2_grpc
 logger = logging.getLogger(__name__)
 
 PUBLISHED_STATUSES = {"PUBLICADO", "PUBLISHED", "published", "publicado"}
+PUBLIC_TRACK_BATCH_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -23,15 +25,38 @@ class CatalogTrack:
     duration_seconds: float | None = None
 
 
+@dataclass(frozen=True)
+class PublicCatalogTrack:
+    """Published track metadata exposed to library views."""
+
+    track_id: str
+    artist_id: str
+    album_id: str | None
+    title: str
+    genre: str
+    cover_asset_id: str | None
+    duration_seconds: float | None
+    status: str
+    artist_name: str
+    album_title: str | None
+    raw: dict[str, Any]
+
+
 class CatalogClient:
     """gRPC client for Catalog Service track metadata."""
 
-    def __init__(self, target: str, timeout_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        target: str,
+        timeout_seconds: float = 5.0,
+        http_base_url: str = "http://catalog-service:8082/api/v1/catalog",
+    ) -> None:
         """Create a Catalog client."""
         if not target.strip():
             raise ValueError("CATALOG_GRPC_TARGET must be configured.")
         self._target = target.strip()
         self._timeout_seconds = timeout_seconds
+        self._http_base_url = http_base_url.rstrip("/")
 
     async def get_playable_track(self, track_id: str) -> CatalogTrack:
         """Fetch and validate that a track is playable."""
@@ -94,6 +119,57 @@ class CatalogClient:
             duration_seconds=response.duration_seconds if response.duration_seconds > 0 else None,
         )
 
+    async def get_public_tracks_by_ids(
+        self,
+        track_ids: list[str],
+    ) -> list[PublicCatalogTrack]:
+        """Fetch public metadata for published tracks, preserving requested order."""
+        if not track_ids:
+            return []
+
+        tracks: list[PublicCatalogTrack] = []
+        for start in range(0, len(track_ids), PUBLIC_TRACK_BATCH_SIZE):
+            tracks.extend(
+                await self._fetch_public_track_batch(
+                    track_ids[start : start + PUBLIC_TRACK_BATCH_SIZE]
+                )
+            )
+        return tracks
+
+    async def _fetch_public_track_batch(
+        self,
+        track_ids: list[str],
+    ) -> list[PublicCatalogTrack]:
+        """Fetch one Catalog HTTP batch within the public endpoint limit."""
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                response = await client.post(
+                    f"{self._http_base_url}/tracks/batch",
+                    json={"trackIds": track_ids},
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "Catalog Service rejected public track batch lookup: %s",
+                exc.response.status_code,
+            )
+            raise AppError(
+                503,
+                "CatalogUnavailable",
+                "Catalog Service is unavailable.",
+            ) from exc
+        except httpx.HTTPError as exc:
+            logger.error("Catalog Service public track batch lookup failed: %s", exc)
+            raise AppError(
+                503,
+                "CatalogUnavailable",
+                "Catalog Service is unavailable.",
+            ) from exc
+
+        payload = response.json()
+        batch_tracks = payload.get("tracks", []) if isinstance(payload, dict) else []
+        return [map_public_track(track) for track in batch_tracks if isinstance(track, dict)]
+
 
 def map_catalog_grpc_error(error: grpc.aio.AioRpcError) -> AppError:
     """Map Catalog gRPC failures to existing playback API errors."""
@@ -123,3 +199,27 @@ def map_catalog_grpc_error(error: grpc.aio.AioRpcError) -> AppError:
         "CatalogUnavailable",
         "Catalog Service is unavailable.",
     )
+
+
+def map_public_track(document: dict[str, Any]) -> PublicCatalogTrack:
+    """Map Catalog HTTP JSON into a typed library metadata object."""
+    return PublicCatalogTrack(
+        track_id=str(document["trackId"]),
+        artist_id=str(document["artistId"]),
+        album_id=str(document["albumId"]) if document.get("albumId") else None,
+        title=str(document["title"]),
+        genre=str(document.get("genre") or ""),
+        cover_asset_id=str(document["coverAssetId"]) if document.get("coverAssetId") else None,
+        duration_seconds=to_optional_float(document.get("durationSeconds")),
+        status=str(document.get("status") or ""),
+        artist_name=str(document.get("artistName") or "Artista"),
+        album_title=str(document["albumTitle"]) if document.get("albumTitle") else None,
+        raw=document,
+    )
+
+
+def to_optional_float(value: object) -> float | None:
+    """Convert a possible JSON numeric value to float."""
+    if value is None:
+        return None
+    return float(value)

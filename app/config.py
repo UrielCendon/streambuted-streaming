@@ -37,6 +37,18 @@ class Settings(BaseSettings):
         default=5.0,
         alias="CATALOG_GRPC_TIMEOUT_SECONDS",
     )
+    catalog_http_base_url: str = Field(
+        default="http://catalog-service:8082/api/v1/catalog",
+        alias="CATALOG_HTTP_BASE_URL",
+    )
+    media_grpc_target: str = Field(
+        default="media-service:9093",
+        alias="MEDIA_GRPC_TARGET",
+    )
+    media_grpc_timeout_seconds: float = Field(
+        default=5.0,
+        alias="MEDIA_GRPC_TIMEOUT_SECONDS",
+    )
 
     minio_endpoint: str = Field(default="minio:9000", alias="MINIO_ENDPOINT")
     minio_access_key: str = Field(default="streambuted", alias="MINIO_ACCESS_KEY")
