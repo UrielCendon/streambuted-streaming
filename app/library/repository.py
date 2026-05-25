@@ -123,7 +123,6 @@ class MongoLibraryRepository:
             "name": name,
             "cover_asset_id": cover_asset_id,
             "is_system": False,
-            "system_key": None,
             "created_at": now,
             "updated_at": now,
         }
