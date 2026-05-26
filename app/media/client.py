@@ -59,7 +59,7 @@ class MediaAssetClient:
             raise AppError(
                 503,
                 "MediaUnavailable",
-                "Media Service is unavailable.",
+                "Media Service no esta disponible.",
             ) from exc
 
         return MediaAssetMetadata(
@@ -75,17 +75,17 @@ class MediaAssetClient:
 def map_media_grpc_error(error: grpc.aio.AioRpcError) -> AppError:
     """Map Media gRPC failures to Library API errors."""
     if error.code() == grpc.StatusCode.NOT_FOUND:
-        return AppError(404, "PlaylistCoverNotFound", "Playlist cover not found.")
+        return AppError(404, "PlaylistCoverNotFound", "La portada de la playlist no existe.")
     if error.code() == grpc.StatusCode.PERMISSION_DENIED:
-        return AppError(403, "PlaylistCoverForbidden", "Playlist cover is not accessible.")
+        return AppError(403, "PlaylistCoverForbidden", "La portada de la playlist no es accesible.")
     if error.code() == grpc.StatusCode.UNAUTHENTICATED:
-        return AppError(401, "Unauthorized", "Missing or invalid Authorization header.")
+        return AppError(401, "Unauthorized", "Falta el encabezado Authorization o no es valido.")
     if error.code() == grpc.StatusCode.INVALID_ARGUMENT:
-        return AppError(400, "InvalidPlaylistCover", "Playlist cover id is invalid.")
+        return AppError(400, "InvalidPlaylistCover", "El id de la portada de la playlist no es valido.")
     if error.code() in {
         grpc.StatusCode.DEADLINE_EXCEEDED,
         grpc.StatusCode.UNAVAILABLE,
     }:
-        return AppError(503, "MediaUnavailable", "Media Service is unavailable.")
+        return AppError(503, "MediaUnavailable", "Media Service no esta disponible.")
 
-    return AppError(503, "MediaUnavailable", "Media Service is unavailable.")
+    return AppError(503, "MediaUnavailable", "Media Service no esta disponible.")

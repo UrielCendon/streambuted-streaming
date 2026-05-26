@@ -69,13 +69,13 @@ class CatalogClient:
             raise AppError(
                 409,
                 "TrackNotPlayable",
-                "Track is not published.",
+                "La pista no esta publicada.",
             )
         if not audio_asset_id:
             raise AppError(
                 409,
                 "TrackNotPlayable",
-                "Track does not have an audio asset.",
+                "La pista no tiene un archivo de audio asociado.",
             )
 
         return CatalogTrack(
@@ -101,7 +101,7 @@ class CatalogClient:
             raise AppError(
                 503,
                 "CatalogUnavailable",
-                "Catalog Service is unavailable.",
+                "El Catalog Service no esta disponible.",
             ) from exc
 
         raw = {
@@ -156,14 +156,14 @@ class CatalogClient:
             raise AppError(
                 503,
                 "CatalogUnavailable",
-                "Catalog Service is unavailable.",
+                "El Catalog Service no esta disponible.",
             ) from exc
         except httpx.HTTPError as exc:
             logger.error("Catalog Service public track batch lookup failed: %s", exc)
             raise AppError(
                 503,
                 "CatalogUnavailable",
-                "Catalog Service is unavailable.",
+                "El Catalog Service no esta disponible.",
             ) from exc
 
         payload = response.json()
@@ -174,30 +174,30 @@ class CatalogClient:
 def map_catalog_grpc_error(error: grpc.aio.AioRpcError) -> AppError:
     """Map Catalog gRPC failures to existing playback API errors."""
     if error.code() == grpc.StatusCode.NOT_FOUND:
-        return AppError(404, "TrackNotFound", "Track not found.")
+        return AppError(404, "TrackNotFound", "La pista no existe o ya no esta disponible.")
     if error.code() == grpc.StatusCode.INVALID_ARGUMENT:
         return AppError(
             400,
             "CatalogRejectedTrack",
-            "Catalog Service rejected the track lookup.",
+            "Catalog Service rechazo la consulta de la pista.",
         )
     if error.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
         return AppError(
             503,
             "CatalogUnavailable",
-            "Catalog Service is unavailable.",
+            "El Catalog Service no esta disponible.",
         )
     if error.code() == grpc.StatusCode.UNAVAILABLE:
         return AppError(
             503,
             "CatalogUnavailable",
-            "Catalog Service is unavailable.",
+            "El Catalog Service no esta disponible.",
         )
 
     return AppError(
         503,
         "CatalogUnavailable",
-        "Catalog Service is unavailable.",
+        "El Catalog Service no esta disponible.",
     )
 
 

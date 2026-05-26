@@ -38,7 +38,7 @@ class RangeNotSatisfiableError(Exception):
 
     def __init__(self, size_bytes: int) -> None:
         """Create a range error for the requested object size."""
-        super().__init__("Requested range is not satisfiable.")
+        super().__init__("El rango solicitado no se puede satisfacer.")
         self.size_bytes = size_bytes
 
 
@@ -97,7 +97,7 @@ async def validation_error_handler(
         status_code=422,
         content={
             "error": "ValidationError",
-            "message": "Request validation failed.",
+            "message": "La solicitud no cumple con el formato esperado.",
             "statusCode": 422,
             "details": details,
             "timestamp": utc_timestamp(),
@@ -112,7 +112,7 @@ async def unhandled_error_handler(_request: Request, exc: Exception) -> JSONResp
         status_code=500,
         content={
             "error": "InternalServerError",
-            "message": "An unexpected error occurred.",
+            "message": "Ocurrio un error interno. Intenta de nuevo mas tarde.",
             "statusCode": 500,
             "timestamp": utc_timestamp(),
         },
@@ -131,5 +131,27 @@ def sanitize_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, A
             if context_error is not None:
                 sanitized_context["error"] = str(context_error)
             sanitized_error["ctx"] = sanitized_context
+        sanitized_error["msg"] = spanish_validation_message(sanitized_error)
         sanitized_errors.append(sanitized_error)
     return sanitized_errors
+
+
+def spanish_validation_message(error: dict[str, Any]) -> str:
+    """Return a generic Spanish validation message without leaking internals."""
+    error_type = str(error.get("type") or "")
+    context = error.get("ctx")
+    if error_type == "value_error" and isinstance(context, dict) and context.get("error"):
+        return str(context["error"])
+    if "missing" in error_type:
+        return "El campo es obligatorio."
+    if "uuid" in error_type:
+        return "El valor debe ser un UUID valido."
+    if "greater_than" in error_type:
+        return "El valor debe ser mayor al minimo permitido."
+    if "less_than" in error_type:
+        return "El valor debe ser menor al maximo permitido."
+    if "string_too_short" in error_type:
+        return "El texto es demasiado corto."
+    if "string_too_long" in error_type:
+        return "El texto es demasiado largo."
+    return "El valor no cumple con el formato esperado."

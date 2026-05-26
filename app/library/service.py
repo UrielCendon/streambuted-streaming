@@ -111,7 +111,7 @@ class LibraryService:
             raise AppError(
                 422,
                 "ValidationError",
-                "At least one playlist field must be provided.",
+                "Debes enviar al menos un campo de la playlist.",
             )
 
         existing = await self._require_playlist(user_id, playlist_id, allow_system=True)
@@ -119,7 +119,7 @@ class LibraryService:
             raise AppError(
                 403,
                 "SystemPlaylistImmutable",
-                "System playlists cannot be renamed.",
+                "Las playlists del sistema no pueden renombrarse.",
             )
         if name is not None:
             await self._validate_playlist_name_uniqueness(
@@ -161,7 +161,7 @@ class LibraryService:
             raise AppError(
                 409,
                 "TrackAlreadyInPlaylist",
-                "This song is already in that playlist.",
+                "Esta cancion ya se encuentra en esa playlist.",
             )
         await self._repository.add_track(playlist.playlist_id, track_id)
         return await self._playlist_detail(playlist)
@@ -239,12 +239,12 @@ class LibraryService:
             authorization_header,
         )
         if metadata.owner_user_id != user_id:
-            raise AppError(403, "PlaylistCoverForbidden", "Playlist cover is not accessible.")
+            raise AppError(403, "PlaylistCoverForbidden", "La portada de la playlist no es accesible.")
         if metadata.asset_type != "PLAYLIST_COVER":
             raise AppError(
                 422,
                 "InvalidPlaylistCoverType",
-                "Playlist cover must be a PLAYLIST_COVER asset.",
+                "La portada debe ser un archivo de tipo PLAYLIST_COVER.",
             )
 
     async def _validate_playlist_name_uniqueness(
@@ -262,7 +262,7 @@ class LibraryService:
             raise AppError(
                 409,
                 "PlaylistNameAlreadyExists",
-                "You already have a playlist with that name.",
+                "Ya tienes una playlist con ese nombre.",
             )
 
 
@@ -287,4 +287,4 @@ def map_track_response(
 
 def playlist_not_found_error() -> AppError:
     """Build a not-found error without revealing playlist ownership."""
-    return AppError(404, "PlaylistNotFound", "Playlist not found.")
+    return AppError(404, "PlaylistNotFound", "La playlist no existe o no te pertenece.")

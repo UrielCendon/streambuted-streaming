@@ -34,7 +34,7 @@ class PlaybackProgressRequest(BaseModel):
     def validate_duration(self) -> "PlaybackProgressRequest":
         """Validate duration against current playback position."""
         if self.duration_seconds is not None and self.duration_seconds < self.position_seconds:
-            raise ValueError("durationSeconds must be greater than or equal to positionSeconds.")
+            raise ValueError("durationSeconds debe ser mayor o igual que positionSeconds.")
         return self
 
 

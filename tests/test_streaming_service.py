@@ -40,7 +40,7 @@ class FakeJwtValidator:
         authorization_header: str | None,
     ) -> AuthenticatedUser:
         if authorization_header != "Bearer token":
-            raise AppError(401, "Unauthorized", "Missing or invalid Authorization header.")
+            raise AppError(401, "Unauthorized", "Falta el encabezado Authorization o no es valido.")
         return AuthenticatedUser(subject=USER_ID, role=UserRole.LISTENER)
 
 
@@ -75,14 +75,14 @@ class FakeCatalogClient:
 
     async def get_playable_track(self, track_id: str) -> CatalogTrack:
         if self.unavailable:
-            raise AppError(503, "CatalogUnavailable", "Catalog Service is unavailable.")
+            raise AppError(503, "CatalogUnavailable", "El Catalog Service no esta disponible.")
         track = self.tracks.get(track_id)
         if track is None:
-            raise AppError(404, "TrackNotFound", "Track not found.")
+            raise AppError(404, "TrackNotFound", "La pista no existe o ya no esta disponible.")
         if track.status != "PUBLICADO":
-            raise AppError(409, "TrackNotPlayable", "Track is not published.")
+            raise AppError(409, "TrackNotPlayable", "La pista no esta publicada.")
         if not track.audio_asset_id:
-            raise AppError(409, "TrackNotPlayable", "Track does not have an audio asset.")
+            raise AppError(409, "TrackNotPlayable", "La pista no tiene un archivo de audio asociado.")
         return track
 
     async def get_public_tracks_by_ids(self, track_ids: list[str]) -> list[PublicCatalogTrack]:
@@ -124,10 +124,10 @@ class FakeMediaAssetClient:
         authorization_header: str | None,
     ):
         if authorization_header != "Bearer token":
-            raise AppError(401, "Unauthorized", "Missing or invalid Authorization header.")
+            raise AppError(401, "Unauthorized", "Falta el encabezado Authorization o no es valido.")
         asset = self.assets.get(asset_id)
         if asset is None:
-            raise AppError(404, "PlaylistCoverNotFound", "Playlist cover not found.")
+            raise AppError(404, "PlaylistCoverNotFound", "La portada de la playlist no existe.")
 
         class Metadata:
             asset_type = str(asset["asset_type"])
@@ -144,7 +144,7 @@ class FakeStorage:
     def stat_audio(self, asset_id: str) -> AudioObjectMetadata:
         content = self.assets.get(asset_id)
         if content is None:
-            raise AppError(404, "AssetNotFound", "Audio asset not found.")
+            raise AppError(404, "AssetNotFound", "El archivo de audio no existe o ya no esta disponible.")
         return AudioObjectMetadata(
             asset_id=asset_id,
             content_type="audio/mpeg",
@@ -1016,7 +1016,7 @@ class MissingCatalogPlaybackGrpcServicer(
     catalog_playback_pb2_grpc.CatalogPlaybackServiceServicer
 ):
     async def GetPlayableTrack(self, request, context):
-        await context.abort(grpc.StatusCode.NOT_FOUND, "Track not found.")
+        await context.abort(grpc.StatusCode.NOT_FOUND, "La pista no existe o ya no esta disponible.")
 
 
 def test_progress_repository_creates_unique_user_track_index() -> None:

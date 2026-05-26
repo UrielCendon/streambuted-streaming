@@ -84,7 +84,7 @@ async def stream_track(
         raise AppError(
             401,
             "Unauthorized",
-            "A playback token or Authorization header is required.",
+            "Debes enviar un token de reproduccion o el encabezado Authorization.",
         )
 
     return await playback_service.stream_track(

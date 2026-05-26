@@ -67,12 +67,12 @@ class MinioAudioStorage:
             )
         except S3Error as exc:
             if exc.code in {"NoSuchKey", "NoSuchObject", "NotFound"}:
-                raise AppError(404, "AssetNotFound", "Audio asset not found.") from exc
+                raise AppError(404, "AssetNotFound", "El archivo de audio no existe o ya no esta disponible.") from exc
             logger.error("Failed to stat MinIO object: %s", exc, exc_info=True)
             raise AppError(
                 503,
                 "StorageUnavailable",
-                "Media storage is unavailable.",
+                "El almacenamiento multimedia no esta disponible.",
             ) from exc
 
         return AudioObjectMetadata(
@@ -98,12 +98,12 @@ class MinioAudioStorage:
             )
         except S3Error as exc:
             if exc.code in {"NoSuchKey", "NoSuchObject", "NotFound"}:
-                raise AppError(404, "AssetNotFound", "Audio asset not found.") from exc
+                raise AppError(404, "AssetNotFound", "El archivo de audio no existe o ya no esta disponible.") from exc
             logger.error("Failed to read MinIO object: %s", exc, exc_info=True)
             raise AppError(
                 503,
                 "StorageUnavailable",
-                "Media storage is unavailable.",
+                "El almacenamiento multimedia no esta disponible.",
             ) from exc
 
         def iter_content() -> Iterator[bytes]:

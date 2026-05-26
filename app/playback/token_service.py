@@ -43,22 +43,22 @@ class PlaybackTokenService:
             raise AppError(
                 401,
                 "Unauthorized",
-                "Invalid or expired playback token.",
+                "El token de reproduccion es invalido o expiro.",
             ) from exc
 
         if not isinstance(payload, dict):
-            raise AppError(401, "Unauthorized", "Invalid playback token payload.")
+            raise AppError(401, "Unauthorized", "El contenido del token de reproduccion no es valido.")
 
         subject = payload.get("sub")
         token_track_id = payload.get("trackId")
         purpose = payload.get("purpose")
 
         if not isinstance(subject, str) or not subject.strip():
-            raise AppError(401, "Unauthorized", "Playback token subject is missing.")
+            raise AppError(401, "Unauthorized", "El token de reproduccion no incluye el usuario.")
         if token_track_id != track_id:
-            raise AppError(403, "Forbidden", "Playback token is not valid for this track.")
+            raise AppError(403, "Forbidden", "El token de reproduccion no corresponde a esta pista.")
         if purpose != PLAYBACK_TOKEN_PURPOSE:
-            raise AppError(401, "Unauthorized", "Playback token purpose is invalid.")
+            raise AppError(401, "Unauthorized", "El proposito del token de reproduccion no es valido.")
 
         return subject.strip()
 
