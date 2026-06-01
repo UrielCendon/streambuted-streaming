@@ -146,6 +146,7 @@ def create_app(
 
     app.state.playback_token_service = app_playback_token_service
     app.state.jwt_validator = app_jwt_validator
+    app.state.settings = app_settings
     app.state.playback_service = PlaybackService(
         catalog_client=app_catalog_client,
         storage=app_storage,

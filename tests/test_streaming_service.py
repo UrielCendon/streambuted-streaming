@@ -1,7 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import grpc
@@ -535,12 +534,31 @@ def test_stream_session_returns_scoped_playback_token() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    query = parse_qs(urlparse(body["streamUrl"]).query)
-    token = query["playbackToken"][0]
+    assert body["streamUrl"] == f"/api/v1/playback/tracks/{TRACK_ID}/stream"
+    set_cookie = response.headers["set-cookie"]
+    assert "streambuted_playback_token=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    token = response.cookies["streambuted_playback_token"]
     payload = jwt.decode(token, PLAYBACK_SECRET, algorithms=["HS256"])
     assert payload["sub"] == USER_ID
     assert payload["trackId"] == TRACK_ID
     assert payload["purpose"] == PLAYBACK_TOKEN_PURPOSE
+
+
+def test_stream_accepts_playback_cookie_from_stream_session() -> None:
+    client, *_ = build_client()
+
+    with client:
+        session_response = client.post(
+            f"/api/v1/playback/tracks/{TRACK_ID}/stream-session",
+            headers={"Authorization": "Bearer token"},
+        )
+        response = client.get(
+            f"/api/v1/playback/tracks/{TRACK_ID}/stream",
+        )
+
+    assert session_response.status_code == 200
+    assert response.status_code == 200
 
 
 def test_stream_session_rejects_suspended_account() -> None:
@@ -637,6 +655,7 @@ def test_put_progress_validates_negative_position() -> None:
         )
 
     assert response.status_code == 422
+    assert all("input" not in item for item in response.json()["details"])
 
 
 def test_put_progress_validates_duration_not_less_than_position() -> None:

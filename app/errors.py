@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -7,6 +8,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
+SENSITIVE_FIELD_NAMES = {
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "accesstoken",
+    "refreshtoken",
+    "password",
+    "confirmpassword",
+    "playbacktoken",
+    "attemptid",
+    "verificationcode",
+    "resetcode",
+    "token",
+}
 
 
 def flatten_details(details: Any | None) -> dict[str, Any]:
@@ -53,7 +68,7 @@ async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
         "code": exc.code,
         "message": exc.message,
         "status_code": exc.status_code,
-        "details": exc.details,
+        "details": sanitize_sensitive_data(exc.details),
     }
     if exc.status_code >= 500:
         logger.error("Handled application error: %s", log_payload)
@@ -62,13 +77,13 @@ async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
 
     payload: dict[str, Any] = {
         "error": exc.code,
-        **flatten_details(exc.details),
+        **flatten_details(sanitize_sensitive_data(exc.details)),
         "message": exc.message,
         "statusCode": exc.status_code,
         "timestamp": utc_timestamp(),
     }
     if exc.details is not None:
-        payload["details"] = exc.details
+        payload["details"] = sanitize_sensitive_data(exc.details)
     return JSONResponse(status_code=exc.status_code, content=payload)
 
 
@@ -124,16 +139,47 @@ def sanitize_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, A
     sanitized_errors: list[dict[str, Any]] = []
     for error in errors:
         sanitized_error = dict(error)
+        sanitized_error.pop("input", None)
         context = sanitized_error.get("ctx")
         if isinstance(context, dict):
             sanitized_context = dict(context)
             context_error = sanitized_context.get("error")
             if context_error is not None:
                 sanitized_context["error"] = str(context_error)
-            sanitized_error["ctx"] = sanitized_context
+            sanitized_error["ctx"] = sanitize_sensitive_data(sanitized_context)
         sanitized_error["msg"] = spanish_validation_message(sanitized_error)
         sanitized_errors.append(sanitized_error)
     return sanitized_errors
+
+
+def sanitize_sensitive_data(value: Any) -> Any:
+    """Recursively redact sensitive fields before logging or serializing errors."""
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key).replace("-", "").replace("_", "").lower()
+            if normalized_key in SENSITIVE_FIELD_NAMES:
+                sanitized[key] = "[REDACTED]"
+            else:
+                sanitized[key] = sanitize_sensitive_data(item)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_sensitive_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(sanitize_sensitive_data(item) for item in value)
+    if isinstance(value, str):
+        return redact_sensitive_string(value)
+    return value
+
+
+def redact_sensitive_string(value: str) -> str:
+    """Remove high-risk token shapes from plain strings."""
+    return re.sub(r"Bearer\s+[^\s]+", "Bearer [REDACTED]", re.sub(
+        r"playbackToken=[^&\s]+",
+        "playbackToken=[REDACTED]",
+        value,
+        flags=re.IGNORECASE,
+    ), flags=re.IGNORECASE)
 
 
 def spanish_validation_message(error: dict[str, Any]) -> str:

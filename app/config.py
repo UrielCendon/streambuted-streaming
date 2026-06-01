@@ -24,6 +24,10 @@ class Settings(BaseSettings):
         default=300,
         alias="STREAMING_PLAYBACK_TOKEN_TTL_SECONDS",
     )
+    streaming_playback_cookie_secure: bool = Field(
+        default=False,
+        alias="STREAMING_PLAYBACK_COOKIE_SECURE",
+    )
     streaming_valid_playback_seconds: float = Field(
         default=30,
         alias="STREAMING_VALID_PLAYBACK_SECONDS",

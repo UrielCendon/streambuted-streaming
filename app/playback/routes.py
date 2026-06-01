@@ -1,10 +1,13 @@
+from datetime import UTC, datetime
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Cookie, Depends, Header, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.auth.jwt_validator import JwtValidator
 from app.auth.models import AuthenticatedUser
+from app.config import Settings
 from app.errors import AppError
 from app.playback.schemas import (
     HealthResponse,
@@ -18,11 +21,17 @@ from app.playback.service import PlaybackService
 from app.playback.token_service import PlaybackTokenService
 
 router = APIRouter(prefix="/api/v1/playback", tags=["Playback"])
+PLAYBACK_COOKIE_NAME = "streambuted_playback_token"
 
 
 def get_playback_service(request: Request) -> PlaybackService:
     """Resolve the playback service from application state."""
     return request.app.state.playback_service
+
+
+def get_settings(request: Request) -> Settings:
+    """Resolve the application settings from application state."""
+    return request.app.state.settings
 
 
 def get_jwt_validator(request: Request) -> JwtValidator:
@@ -55,36 +64,58 @@ async def public_health() -> HealthResponse:
 )
 async def create_stream_session(
     track_id: str,
+    response: Response,
     current_user: AuthenticatedUser = Depends(get_current_user),
     playback_service: PlaybackService = Depends(get_playback_service),
+    settings: Settings = Depends(get_settings),
 ) -> StreamSessionResponse:
     """Create a short-lived stream session for a published track."""
-    return await playback_service.create_stream_session(
+    session = await playback_service.create_stream_session(
         track_id=track_id,
         user_id=current_user.subject,
     )
+    max_age = max(
+        1,
+        int((session.session.expires_at - datetime.now(UTC)).total_seconds()),
+    )
+    response.set_cookie(
+        key=PLAYBACK_COOKIE_NAME,
+        value=session.playback_token,
+        httponly=True,
+        secure=settings.streaming_playback_cookie_secure,
+        samesite="strict",
+        path=f"/api/v1/playback/tracks/{quote(track_id, safe='')}/stream",
+        max_age=max_age,
+    )
+    return session.session
 
 
 @router.get("/tracks/{track_id}/stream")
 async def stream_track(
     track_id: str,
     playback_token: Annotated[str | None, Query(alias="playbackToken")] = None,
+    playback_cookie_token: Annotated[str | None, Cookie(alias=PLAYBACK_COOKIE_NAME)] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
     range_header: Annotated[str | None, Header(alias="Range")] = None,
     playback_service: PlaybackService = Depends(get_playback_service),
     token_service: PlaybackTokenService = Depends(get_playback_token_service),
     validator: JwtValidator = Depends(get_jwt_validator),
 ) -> StreamingResponse:
-    """Stream audio for a published track using a playback token or Bearer token."""
-    if playback_token:
-        token_service.validate_token(playback_token, track_id)
+    """Stream audio for a published track using a playback cookie or compatible token transport."""
+    effective_playback_token = playback_cookie_token or playback_token
+    if effective_playback_token:
+        token_service.validate_token(effective_playback_token, track_id)
     elif authorization:
-        validator.validate_authorization_header(authorization)
+        bearer_token = JwtValidator.extract_bearer_token(authorization)
+        try:
+            token_service.validate_token(bearer_token, track_id)
+        except AppError:
+            validator.validate_authorization_header(authorization)
     else:
         raise AppError(
             401,
             "Unauthorized",
-            "Debes enviar un token de reproduccion o el encabezado Authorization.",
+            "Debes enviar una sesion de reproduccion valida o el encabezado Authorization.",
         )
 
     return await playback_service.stream_track(

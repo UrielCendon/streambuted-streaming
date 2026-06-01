@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
+from dataclasses import dataclass
 import inspect
 from typing import Any
-from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi.responses import StreamingResponse
@@ -44,21 +44,20 @@ class PlaybackService:
         self,
         track_id: str,
         user_id: str,
-    ) -> StreamSessionResponse:
+    ) -> "PlaybackStreamSession":
         """Create an ephemeral playback token for a published track."""
         await self._catalog_client.get_playable_track(track_id)
         playback_token, expires_at = self._playback_token_service.create_token(
             user_id=user_id,
             track_id=track_id,
         )
-        stream_url = (
-            f"/api/v1/playback/tracks/{quote(track_id, safe='')}/stream"
-            f"?playbackToken={quote(playback_token, safe='')}"
-        )
-        return StreamSessionResponse(
-            streamUrl=stream_url,
-            expiresAt=expires_at,
-            trackId=track_id,
+        return PlaybackStreamSession(
+            session=StreamSessionResponse(
+                streamUrl=f"/api/v1/playback/tracks/{track_id}/stream",
+                expiresAt=expires_at,
+                trackId=track_id,
+            ),
+            playback_token=playback_token,
         )
 
     async def stream_track(
@@ -177,6 +176,14 @@ def progress_response(progress: PlaybackProgress) -> PlaybackProgressResponse:
         durationSeconds=progress.duration_seconds,
         updatedAt=progress.updated_at,
     )
+
+
+@dataclass(frozen=True)
+class PlaybackStreamSession:
+    """Internal playback session result used to attach secure transport state."""
+
+    session: StreamSessionResponse
+    playback_token: str
 
 
 def build_track_playback_counted_event(
