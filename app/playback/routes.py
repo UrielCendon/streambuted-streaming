@@ -83,7 +83,7 @@ async def create_stream_session(
         value=session.playback_token,
         httponly=True,
         secure=settings.streaming_playback_cookie_secure,
-        samesite="strict",
+        samesite=settings.streaming_playback_cookie_samesite,
         path=f"/api/v1/playback/tracks/{quote(track_id, safe='')}/stream",
         max_age=max_age,
     )

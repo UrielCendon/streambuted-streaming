@@ -389,7 +389,7 @@ class FakePublisher:
         return True
 
 
-def build_settings() -> Settings:
+def build_settings(**overrides: Any) -> Settings:
     return Settings(
         minio_secret_key="minio-secret",
         rabbitmq_default_pass="rabbit-secret",
@@ -397,6 +397,7 @@ def build_settings() -> Settings:
         streaming_playback_token_secret=PLAYBACK_SECRET,
         streaming_playback_token_ttl_seconds=300,
         streaming_valid_playback_seconds=30,
+        **overrides,
     )
 
 
@@ -543,6 +544,35 @@ def test_stream_session_returns_scoped_playback_token() -> None:
     assert payload["sub"] == USER_ID
     assert payload["trackId"] == TRACK_ID
     assert payload["purpose"] == PLAYBACK_TOKEN_PURPOSE
+
+
+def test_stream_session_can_set_cross_site_secure_playback_cookie() -> None:
+    app = create_app(
+        settings=build_settings(
+            streaming_playback_cookie_secure=True,
+            streaming_playback_cookie_samesite="none",
+        ),
+        storage=FakeStorage(),
+        progress_repository=FakeProgressRepository(),
+        library_repository=FakeLibraryRepository(),
+        catalog_client=FakeCatalogClient(),
+        media_asset_client=FakeMediaAssetClient(),
+        event_publisher=FakePublisher(),
+        jwt_validator=FakeJwtValidator(),
+        playback_token_service=PlaybackTokenService(PLAYBACK_SECRET, 300),
+    )
+    client = TestClient(app)
+
+    with client:
+        response = client.post(
+            f"/api/v1/playback/tracks/{TRACK_ID}/stream-session",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert response.status_code == 200
+    set_cookie = response.headers["set-cookie"].lower()
+    assert "secure" in set_cookie
+    assert "samesite=none" in set_cookie
 
 
 def test_stream_accepts_playback_cookie_from_stream_session() -> None:

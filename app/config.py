@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default=False,
         alias="STREAMING_PLAYBACK_COOKIE_SECURE",
     )
+    streaming_playback_cookie_samesite: str = Field(
+        default="strict",
+        alias="STREAMING_PLAYBACK_COOKIE_SAMESITE",
+    )
     streaming_valid_playback_seconds: float = Field(
         default=30,
         alias="STREAMING_VALID_PLAYBACK_SECONDS",
@@ -100,6 +104,15 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return str(value)
+
+    @field_validator("streaming_playback_cookie_samesite", mode="before")
+    @classmethod
+    def validate_playback_cookie_samesite(cls, value: object) -> str:
+        """Validate SameSite mode used by the playback session cookie."""
+        normalized = str(value or "strict").strip().lower()
+        if normalized not in {"strict", "lax", "none"}:
+            raise ValueError("STREAMING_PLAYBACK_COOKIE_SAMESITE must be strict, lax, or none.")
+        return normalized
 
     @property
     def allowed_cors_origins(self) -> list[str]:
