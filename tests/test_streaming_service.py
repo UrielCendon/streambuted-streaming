@@ -775,6 +775,28 @@ def test_like_track_creates_liked_playlist_idempotently() -> None:
     assert body["tracks"][0]["artistName"] == "Signal Artist"
 
 
+def test_liked_songs_count_drops_when_a_saved_track_is_retired() -> None:
+    client, catalog, *_ = build_client()
+
+    with client:
+        client.put(
+            f"/api/v1/library/tracks/{TRACK_ID}/like",
+            headers={"Authorization": "Bearer token"},
+        )
+        catalog.tracks[TRACK_ID] = CatalogTrack(
+            track_id=TRACK_ID,
+            status="RETIRADO",
+            audio_asset_id=ASSET_ID,
+            raw={},
+        )
+        liked_songs = client.get(
+            "/api/v1/library/liked-songs",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert liked_songs.json()["trackCount"] == 0
+
+
 def test_unlike_track_is_idempotent() -> None:
     client, *_ = build_client()
 
@@ -834,6 +856,35 @@ def test_create_playlist_and_add_track() -> None:
     assert updated.status_code == 200
     assert updated.json()["trackCount"] == 1
     assert updated.json()["tracks"][0]["title"] == "Midnight Signals"
+
+
+def test_playlist_summary_count_drops_when_a_saved_track_is_retired() -> None:
+    client, catalog, *_ = build_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/library/playlists",
+            headers={"Authorization": "Bearer token"},
+            json={"name": "Para manejar"},
+        )
+        playlist_id = created.json()["playlistId"]
+        client.post(
+            f"/api/v1/library/playlists/{playlist_id}/tracks",
+            headers={"Authorization": "Bearer token"},
+            json={"trackId": TRACK_ID},
+        )
+        catalog.tracks[TRACK_ID] = CatalogTrack(
+            track_id=TRACK_ID,
+            status="RETIRADO",
+            audio_asset_id=ASSET_ID,
+            raw={},
+        )
+        summary = client.get(
+            "/api/v1/library",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert summary.json()["playlists"][0]["trackCount"] == 0
 
 
 def test_create_playlist_rejects_name_longer_than_twenty_characters() -> None:

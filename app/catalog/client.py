@@ -97,11 +97,11 @@ class CatalogClient:
         except grpc.aio.AioRpcError as exc:
             raise map_catalog_grpc_error(exc) from exc
         except (grpc.RpcError, OSError) as exc:
-            logger.error("Catalog Service is unavailable: %s", exc)
+            logger.error("Catalog dependency is unavailable: %s", exc)
             raise AppError(
                 503,
                 "CatalogUnavailable",
-                "El Catalog Service no esta disponible.",
+                "Esta funcion no esta disponible en este momento. Intenta de nuevo mas tarde.",
             ) from exc
 
         raw = {
@@ -150,20 +150,20 @@ class CatalogClient:
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.error(
-                "Catalog Service rejected public track batch lookup: %s",
+                "Catalog dependency rejected public track batch lookup: %s",
                 exc.response.status_code,
             )
             raise AppError(
                 503,
                 "CatalogUnavailable",
-                "El Catalog Service no esta disponible.",
+                "No se pudieron recuperar los datos relacionados en este momento.",
             ) from exc
         except httpx.HTTPError as exc:
-            logger.error("Catalog Service public track batch lookup failed: %s", exc)
+            logger.error("Catalog dependency public track batch lookup failed: %s", exc)
             raise AppError(
                 503,
                 "CatalogUnavailable",
-                "El Catalog Service no esta disponible.",
+                "Esta funcion no esta disponible en este momento. Intenta de nuevo mas tarde.",
             ) from exc
 
         payload = response.json()
@@ -179,25 +179,25 @@ def map_catalog_grpc_error(error: grpc.aio.AioRpcError) -> AppError:
         return AppError(
             400,
             "CatalogRejectedTrack",
-            "Catalog Service rechazo la consulta de la pista.",
+            "No se pudo validar la informacion de la pista solicitada.",
         )
     if error.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
         return AppError(
             503,
             "CatalogUnavailable",
-            "El Catalog Service no esta disponible.",
+            "La solicitud tardo demasiado y no se pudo completar. Intenta nuevamente.",
         )
     if error.code() == grpc.StatusCode.UNAVAILABLE:
         return AppError(
             503,
             "CatalogUnavailable",
-            "El Catalog Service no esta disponible.",
+            "Esta funcion no esta disponible en este momento. Intenta de nuevo mas tarde.",
         )
 
     return AppError(
         503,
         "CatalogUnavailable",
-        "El Catalog Service no esta disponible.",
+        "No se pudo validar la informacion relacionada con esta accion.",
     )
 
 

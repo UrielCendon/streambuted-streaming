@@ -189,13 +189,14 @@ class LibraryService:
         return playlist
 
     async def _playlist_summary(self, playlist: LibraryPlaylist) -> LibraryPlaylistResponse:
+        track_count = await self._playlist_visible_track_count(playlist.playlist_id)
         return LibraryPlaylistResponse(
             playlistId=playlist.playlist_id,
             name=playlist.name,
             coverAssetId=playlist.cover_asset_id,
             isSystem=playlist.is_system,
             systemKey=playlist.system_key,
-            trackCount=await self._repository.count_items(playlist.playlist_id),
+            trackCount=track_count,
             createdAt=playlist.created_at,
             updatedAt=playlist.updated_at,
         )
@@ -203,13 +204,25 @@ class LibraryService:
     async def _playlist_detail(self, playlist: LibraryPlaylist) -> LibraryPlaylistDetailResponse:
         items = await self._repository.list_items(playlist.playlist_id)
         tracks = await self._hydrate_items(items)
-        summary = await self._playlist_summary(playlist)
-        payload = summary.model_dump(by_alias=True)
-        payload["trackCount"] = len(tracks)
+        payload = {
+            "playlistId": playlist.playlist_id,
+            "name": playlist.name,
+            "coverAssetId": playlist.cover_asset_id,
+            "isSystem": playlist.is_system,
+            "systemKey": playlist.system_key,
+            "trackCount": len(tracks),
+            "createdAt": playlist.created_at,
+            "updatedAt": playlist.updated_at,
+        }
         return LibraryPlaylistDetailResponse(
             **payload,
             tracks=tracks,
         )
+
+    async def _playlist_visible_track_count(self, playlist_id: str) -> int:
+        items = await self._repository.list_items(playlist_id)
+        tracks = await self._hydrate_items(items)
+        return len(tracks)
 
     async def _hydrate_items(
         self,
