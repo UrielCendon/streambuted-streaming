@@ -25,6 +25,7 @@ from app.library.repository import MongoLibraryRepository
 from app.library.routes import router as library_router
 from app.library.service import LibraryService
 from app.media.client import MediaAssetClient
+from app.openapi import configure_openapi, register_swagger_docs
 from app.playback.routes import router as playback_router
 from app.playback.service import PlaybackService
 from app.playback.token_service import PlaybackTokenService
@@ -126,8 +127,33 @@ def create_app(
 
     app = FastAPI(
         title="StreamButed Streaming Service",
+        description=(
+            "Playback bajo demanda y biblioteca de usuarios. "
+            "Sirve sesiones de streaming, progreso, likes y playlists privadas."
+        ),
         version="1.0.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url="/api/v1/streaming/openapi.json",
         lifespan=lifespan,
+    )
+    register_swagger_docs(
+        app,
+        service_name="StreamButed Streaming Service",
+        docs_url="/api/v1/streaming/docs",
+        openapi_url="/api/v1/streaming/openapi.json",
+    )
+    configure_openapi(
+        app,
+        title="StreamButed Streaming Service",
+        version="1.0.0",
+        description=(
+            "Playback bajo demanda y biblioteca de usuarios. "
+            "Incluye endpoints /api/v1/playback y /api/v1/library detras del gateway."
+        ),
+        public_paths={
+            "/api/v1/playback/tracks/{track_id}/stream",
+        },
     )
     app.add_middleware(
         CORSMiddleware,
